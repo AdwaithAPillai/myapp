@@ -6,8 +6,8 @@ on:
 
 env:
   REGISTRY: harbor.opsmonsters.in
-  PROJECT: demo          # change if your Harbor project name is different
-  IMAGE_NAME: myapp       # change if you want a different image name
+  PROJECT: demo
+  IMAGE_NAME: myapp
   TAG: latest
 
 jobs:
