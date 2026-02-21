@@ -5,25 +5,38 @@ on:
     branches:
       - main
 
+env:
+  REGISTRY: harbor.opsmonsters.in
+  PROJECT: demo
+  IMAGE_NAME: myapp
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
+    - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Log in to Harbor
       uses: docker/login-action@v3
       with:
-        registry: ${{ secrets.HARBOR_URL }}
+        registry: ${{ env.REGISTRY }}
         username: ${{ secrets.HARBOR_USERNAME }}
         password: ${{ secrets.HARBOR_PASSWORD }}
 
-    - name: Build Docker Image
+    - name: Set image tag
       run: |
-        docker build -t ${{ secrets.HARBOR_URL }}/demo/myapp:latest .
+        echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-    - name: Push Docker Image
+    - name: Build Docker image
       run: |
-        docker push ${{ secrets.HARBOR_URL }}/demo/myapp:latest
+        docker build \
+          -t $REGISTRY/$PROJECT/$IMAGE_NAME:$IMAGE_TAG \
+          -t $REGISTRY/$PROJECT/$IMAGE_NAME:latest \
+          .
+
+    - name: Push Docker image
+      run: |
+        docker push $REGISTRY/$PROJECT/$IMAGE_NAME:$IMAGE_TAG
+        docker push $REGISTRY/$PROJECT/$IMAGE_NAME:latest
