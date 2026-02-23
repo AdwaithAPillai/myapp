@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: harbor.opsmonsters.in
-  PROJECT: test
+  PROJECT: demo
   IMAGE_NAME: myapp
 
 jobs:
