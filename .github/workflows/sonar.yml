@@ -1,0 +1,39 @@
+jobs:
+  sonar:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest   # or your self-hosted runner if SonarQube is private IP
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # If your project is Java/Gradle (Spring Boot)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Optional: build to generate binaries (recommended for Java)
+      - name: Build (skip tests)
+        run: |
+          cd hooknest
+          ./gradlew bootJar -x test
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=myapp
+            -Dsonar.sources=hooknest
+            -Dsonar.java.binaries=hooknest/build
+
+  build:
+    needs: sonar
+    runs-on: ubuntu-latest
+    steps:
+      # your existing steps here (docker login, build, push...)
