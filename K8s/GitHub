@@ -1,0 +1,233 @@
+mkdir -p .github/workflows
+
+cat > .github/workflows/ci-cd.yml << 'EOF'
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ develop, main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: myapp
+
+jobs:
+
+  # ──────────────────────────────────────────────
+  # JOB 1 — Lint & SonarQube
+  # ──────────────────────────────────────────────
+  sonarqube:
+    name: "Lint & SonarQube"
+    runs-on: self-hosted
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint
+
+      - name: Run Tests with Coverage
+        run: npm run test -- --coverage --watchAll=false
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # ──────────────────────────────────────────────
+  # JOB 2 — Build & Push to Harbor
+  # ──────────────────────────────────────────────
+  build:
+    name: "Build & Push to Harbor"
+    runs-on: self-hosted
+    needs: sonarqube
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Generate Image Tag
+        id: tag
+        run: |
+          TAG="${{ github.ref_name }}-${{ github.sha }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Generated tag: $TAG"
+
+      - name: Login to Harbor
+        run: |
+          echo "${{ secrets.HARBOR_PASSWORD }}" | docker login \
+            ${{ secrets.HARBOR_URL }} \
+            -u ${{ secrets.HARBOR_USERNAME }} \
+            --password-stdin
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t ${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
+            -t ${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:latest \
+            .
+
+      - name: Push to Harbor
+        run: |
+          docker push ${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          docker push ${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:latest
+
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " ✅ Image pushed to Harbor"
+          echo " Tag: ${{ steps.tag.outputs.tag }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # ──────────────────────────────────────────────
+  # JOB 3 — Deploy to UAT
+  # Triggered by: push to develop branch
+  # ──────────────────────────────────────────────
+  deploy-uat:
+    name: "Deploy to UAT"
+    runs-on: self-hosted
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: uat
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          kubectl cluster-info
+
+      - name: Create UAT Namespace
+        run: |
+          kubectl create namespace uat \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Harbor Pull Secret
+        run: |
+          kubectl create secret docker-registry harbor-secret \
+            --docker-server=${{ secrets.HARBOR_URL }} \
+            --docker-username=${{ secrets.HARBOR_USERNAME }} \
+            --docker-password=${{ secrets.HARBOR_PASSWORD }} \
+            --namespace=uat \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply Manifests
+        run: |
+          kubectl apply -f kubernetes/namespace.yaml
+          kubectl apply -f kubernetes/service.yaml -n uat
+          kubectl apply -f kubernetes/servicemonitor.yaml
+
+      - name: Update Image & Deploy
+        run: |
+          sed -i \
+            "s|192.168.49.2:30002/myapp/myapp:latest|${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}|g" \
+            kubernetes/deployment.yaml
+          kubectl apply -f kubernetes/deployment.yaml -n uat
+
+      - name: Wait for Rollout
+        run: |
+          kubectl rollout status deployment/myapp \
+            -n uat --timeout=120s
+
+      - name: UAT Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " ✅ UAT Deployment Complete"
+          echo " URL: http://192.168.49.2:30080"
+          echo " Tag: ${{ needs.build.outputs.image_tag }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          kubectl get pods -n uat
+          kubectl get svc  -n uat
+
+  # ──────────────────────────────────────────────
+  # JOB 4 — Deploy to Production
+  # Triggered by: push to main branch
+  # Requires:     manual approval in GitHub
+  # ──────────────────────────────────────────────
+  deploy-production:
+    name: "Deploy to Production"
+    runs-on: self-hosted
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          kubectl cluster-info
+
+      - name: Create Production Namespace
+        run: |
+          kubectl create namespace production \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Harbor Pull Secret
+        run: |
+          kubectl create secret docker-registry harbor-secret \
+            --docker-server=${{ secrets.HARBOR_URL }} \
+            --docker-username=${{ secrets.HARBOR_USERNAME }} \
+            --docker-password=${{ secrets.HARBOR_PASSWORD }} \
+            --namespace=production \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply Manifests
+        run: |
+          kubectl apply -f kubernetes/namespace.yaml
+          kubectl apply -f kubernetes/service.yaml -n production
+          kubectl apply -f kubernetes/servicemonitor.yaml
+
+      - name: Update Image & Deploy
+        run: |
+          sed -i \
+            "s|192.168.49.2:30002/myapp/myapp:latest|${{ secrets.HARBOR_URL }}/myapp/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}|g" \
+            kubernetes/deployment.yaml
+          kubectl apply -f kubernetes/deployment.yaml -n production
+
+      - name: Wait for Rollout
+        run: |
+          kubectl rollout status deployment/myapp \
+            -n production --timeout=180s
+
+      - name: Production Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " 🚀 PRODUCTION Deployment Complete"
+          echo " URL: http://192.168.49.2:30081"
+          echo " Tag: ${{ needs.build.outputs.image_tag }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          kubectl get pods -n production
+          kubectl get svc  -n production
+
