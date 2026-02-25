@@ -1,20 +1,38 @@
-name: Lint & SonarQube Analysis
+name: SonarQube Analysis
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ develop, main ]
   pull_request:
 
 jobs:
   sonar:
+    name: SonarQube Scan
     runs-on: self-hosted
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build (skip tests)
+        working-directory: hooknest
+        run: ./gradlew bootJar -x test
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
-          SONAR_HOST_URL: http://localhost:9002
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://localhost:9002
+        with:
+          args: >
+            -Dsonar.projectKey=myapp
+            -Dsonar.sources=hooknest
+            -Dsonar.java.binaries=hooknest/build
