@@ -1,0 +1,21 @@
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: myapp
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: myapp
+  namespaceSelector:
+    matchNames:
+    - uat
+    - production
+  endpoints:
+  - port: http
+    path: /health
+    interval: 30s
+

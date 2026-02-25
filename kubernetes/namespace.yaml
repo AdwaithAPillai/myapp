@@ -1,0 +1,19 @@
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: uat
+  labels:
+    env: uat
+    managed-by: github-actions
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    env: production
+    managed-by: github-actions
+
