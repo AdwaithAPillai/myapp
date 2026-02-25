@@ -19,7 +19,6 @@ jobs:
           java-version: '17'
 
       - name: Build
-        working-directory: hooknest
         run: ./gradlew bootJar -x test
 
       - name: Sonar Scan
@@ -30,5 +29,5 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=myapp
-            -Dsonar.sources=hooknest
-            -Dsonar.java.binaries=hooknest/build
+            -Dsonar.sources=.
+            -Dsonar.java.binaries=build
